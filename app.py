@@ -156,7 +156,8 @@ if not todays_words.empty and st.session_state.current_index < len(todays_words)
     # [핵심 추가] N5, N4, N3 급수일 때만 앞면에 히라가나(발음) 렌더링
     front_reading_html = ""
     if current_word['level'] in ['N5', 'N4', 'N3']:
-        front_reading_html = f'<h3 style="font-size: 26px; font-weight: 900; color: #ff6b6b; margin: 0 0 -10px 0;">{current_word["reading"]}</h3>'
+        # 메인 한자(85px)의 딱 1/7 크기인 12px로 조정! 간격(margin)도 살짝 맞췄습니다.
+        front_reading_html = f'<h3 style="font-size: 21px; font-weight: 900; color: #ff6b6b; margin: 0 0 -5px 0;">{current_word["reading"]}</h3>'
 
     # 카드 HTML 조립
     card_html = f"""
