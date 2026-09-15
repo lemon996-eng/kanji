@@ -125,7 +125,7 @@ with st.sidebar:
                 with st.spinner(f"AI가 {gen_level} 단어 {gen_count}개를 수집하고 있습니다. (약 10~20초 소요)"):
                     try:
                         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                        model = genai.GenerativeModel('gemini-2.0-flash')
+                        model = genai.GenerativeModel('gemini-1.5-flash-latest')
                         
                         prompt = f"""당신은 전문 일본어 강사입니다. JLPT {gen_level} 급수에 해당하는 필수 한자 단어 {gen_count}개를 만들어주세요.
 반드시 아래의 규칙을 엄격하게 지켜서 CSV 형식으로만 출력하세요. 마크다운 기호(```csv 등)나 부가 설명은 절대 쓰지 마세요.
