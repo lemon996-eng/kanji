@@ -7,6 +7,7 @@ from firebase_admin import credentials, firestore
 import json
 import os
 
+# [에이전트용 라이브러리]
 import gspread
 from google.oauth2.service_account import Credentials
 import google.generativeai as genai
@@ -20,6 +21,7 @@ def init_firebase_and_google():
     db = None
     gspread_client = None
     
+    # 1-1. 파이어베이스 열쇠 찾기
     try:
         if os.path.exists('firebase_key.json'):
             cred = credentials.Certificate('firebase_key.json')
@@ -30,10 +32,12 @@ def init_firebase_and_google():
         else:
             return None, None
             
+        # 파이어베이스 DB 연결
         if not firebase_admin._apps:
             firebase_admin.initialize_app(cred)
         db = firestore.client()
         
+        # 1-2. 구글 시트 연결 (파이어베이스 열쇠 재활용)
         scopes = ['https://www.googleapis.com/auth/spreadsheets']
         gspread_creds = Credentials.from_service_account_info(key_dict, scopes=scopes)
         gspread_client = gspread.authorize(gspread_creds)
@@ -113,7 +117,7 @@ with st.sidebar:
     st.write("비밀번호를 입력하여 조종실을 여세요.")
     admin_pw = st.text_input("비밀번호", type="password")
     
-    if admin_pw == "0000":
+    if admin_pw == "0000": # 비밀번호는 '0000' 입니다.
         st.success("✅ 에이전트 접근 허가됨")
         gen_level = st.selectbox("생성할 급수", ["N5", "N4", "N3", "N2", "N1"])
         gen_count = st.number_input("생성할 단어 개수", min_value=5, max_value=30, value=10)
@@ -124,25 +128,28 @@ with st.sidebar:
             else:
                 with st.spinner(f"AI가 {gen_level} 단어 {gen_count}개를 수집하고 있습니다. (약 10~20초 소요)"):
                     try:
+                        # 1. 제미나이 호출 (gemini-2.0-flash 적용)
                         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+                        model = genai.GenerativeModel('gemini-2.0-flash')
                         
-                        prompt = f"""당신은 전문 일본어 강사입니다. JLPT {gen_level} 급수에 해당하는 필수 한자 단어 {gen_count}개를 만들어주세요.
-반드시 아래의 규칙을 엄격하게 지켜서 CSV 형식으로만 출력하세요. 마크다운 기호(```csv 등)나 부가 설명은 절대 쓰지 마세요.
-규칙:
-1. 각 줄마다 level, kanji, reading, meaning, example_ja, example_ko 순서로 콤마(,)로 구분
-2. level은 반드시 '{gen_level}' 로 작성
-3. kanji가 없는 단어(히라가나만 있는 단어)는 제외
-출력 예시:
-{gen_level},勉強,べんきょう,공부,日本語の勉強をする。,일본어 공부를 한다."""
-
+                        prompt = f"""
+                        당신은 전문 일본어 강사입니다. JLPT {gen_level} 급수에 해당하는 필수 한자 단어 {gen_count}개를 만들어주세요.
+                        반드시 아래의 규칙을 엄격하게 지켜서 CSV 형식으로만 출력하세요. 마크다운 기호(```csv 등)나 부가 설명은 절대 쓰지 마세요.
+                        규칙:
+                        1. 각 줄마다 level, kanji, reading, meaning, example_ja, example_ko 순서로 콤마(,)로 구분
+                        2. level은 반드시 '{gen_level}' 로 작성
+                        3. kanji가 없는 단어(히라가나만 있는 단어)는 제외
+                        출력 예시:
+                        {gen_level},勉強,べんきょう,공부,日本語の勉強をする。,일본어 공부를 한다.
+                        """
                         response = model.generate_content(prompt)
-                        # 이전 문법 에러의 원인이었던 줄을 안전하게 한 줄로 처리했습니다.
-                        ai_text = response.text.replace("```csv", "").replace("```", "").strip()
+                        ai_text = response.text.strip().replace("```csv", "").replace("```", "").strip()
                         
+                        # 2. 결과 파싱 및 시트 업데이트
                         new_rows = []
                         for line in ai_text.split('\n'):
                             if line.strip():
+                                # 콤마로 분리하여 리스트로 만듦
                                 row_data = [item.strip() for item in line.split(',')]
                                 if len(row_data) == 6:
                                     new_rows.append(row_data)
@@ -151,12 +158,13 @@ with st.sidebar:
                             sheet = gc.open_by_key(SHEET_ID).sheet1
                             sheet.append_rows(new_rows)
                             st.success(f"🎉 성공적으로 {len(new_rows)}개의 단어를 구글 시트에 추가했습니다!")
-                            st.cache_data.clear()
+                            st.cache_data.clear() # 캐시를 비워서 메인 화면에 즉시 반영
                         else:
                             st.error("데이터를 추가하지 못했습니다. 형식이 맞지 않거나 시트 권한을 확인하세요.")
                             
                     except Exception as e:
                         st.error(f"에이전트 작동 중 오류 발생: {e}")
+
 
 # ==========================================
 # 4. 메인 화면 UI 및 학습 로직
