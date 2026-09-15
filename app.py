@@ -5,31 +5,22 @@ import io
 import firebase_admin
 from firebase_admin import credentials, firestore
 import json
-
-import streamlit as st
-import pandas as pd
-from gtts import gTTS
-import io
-import firebase_admin
-from firebase_admin import credentials, firestore
-import json
-import os # 파일이 있는지 확인하기 위해 추가된 모듈
+import os
 
 # ==========================================
-# 1. 파이어베이스 연동 (오류 해결 버전)
+# 1. 파이어베이스 연동 (로컬/클라우드 자동 인식)
 # ==========================================
 @st.cache_resource
 def init_firebase():
     if not firebase_admin._apps:
         try:
-            # 1. 내 컴퓨터(로컬)에 'firebase_key.json' 파일이 있다면 이걸 사용
             if os.path.exists('firebase_key.json'):
                 cred = credentials.Certificate('firebase_key.json')
-            # 2. 파일이 없다면 스트림릿 클라우드(웹)라고 판단하고 비밀 금고에서 읽어옴
-            else:
+            elif "firebase_json" in st.secrets:
                 key_dict = json.loads(st.secrets["firebase_json"])
                 cred = credentials.Certificate(key_dict)
-            
+            else:
+                return None
             firebase_admin.initialize_app(cred)
         except Exception as e:
             st.error(f"⚠️ 파이어베이스 연결 오류: {e}")
@@ -38,15 +29,11 @@ def init_firebase():
 
 db = init_firebase()
 
-# 내 학습 기록이 저장될 DB 문서 위치 지정
 if db:
     doc_ref = db.collection('japanese_app').document('my_progress')
 else:
     doc_ref = None
 
-# (이하 2번 CSS 설정부터는 기존 코드와 동일합니다)
-
-# DB에서 기록 불러오기 함수
 def load_db_progress():
     if doc_ref:
         doc = doc_ref.get()
@@ -54,7 +41,6 @@ def load_db_progress():
             return doc.to_dict()
     return {'session_count': 1, 'studied_words': []}
 
-# DB에 기록 저장하기 함수
 def save_db_progress(session_count, studied_words):
     if doc_ref:
         doc_ref.set({
@@ -91,26 +77,33 @@ div[data-testid="stLinkButton"] a:active { box-shadow: 0px 0px 0 #000 !important
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 3. 단어 데이터 가져오기 및 DB 기록 병합
+# 3. 내 구글 스프레드시트 단어장 가져오기
 # ==========================================
-@st.cache_data
+# ttl=60 옵션을 주면 60초마다 옛날 기억을 잊고 구글 시트를 새로 확인합니다!
+@st.cache_data(ttl=60)
 def load_data(level):
-    url = f"https://raw.githubusercontent.com/jamsinclair/open-anki-jlpt-decks/main/src/{level.lower()}.csv"
+    url = "https://docs.google.com/spreadsheets/d/1h-kcu7Xr0Mpwy-cGMqxv9mIlxVFFXRXVMpP9DqxyRDQ/export?format=csv"
+    
     try:
         df = pd.read_csv(url)
-        if 'kana' in df.columns: df = df.rename(columns={'kana': 'reading'})
-        if 'english' in df.columns: df = df.rename(columns={'english': 'meaning'})
-        if 'kanji' not in df.columns and len(df.columns) >= 3:
-             df = df.rename(columns={df.columns[0]: 'kanji', df.columns[1]: 'reading', df.columns[2]: 'meaning'})
+        
         if 'kanji' in df.columns:
             df = df.dropna(subset=['kanji'])
         
         if 'example_ja' not in df.columns: df['example_ja'] = ""
         if 'example_ko' not in df.columns: df['example_ko'] = ""
         
-        df['level'] = level.upper()
+        if 'level' in df.columns:
+            # 엑셀 입력 시 실수로 들어간 띄어쓰기(공백)를 완벽하게 제거(.str.strip())
+            df['level'] = df['level'].astype(str).str.strip().str.upper()
+            df = df[df['level'] == level.upper()]
+        else:
+            df['level'] = level.upper()
+            
         return df.reset_index(drop=True)
+        
     except Exception as e:
+        st.error(f"단어장을 불러오는 데 실패했습니다: {e}")
         return pd.DataFrame({'kanji': ['食べる'], 'reading': ['たべる'], 'meaning': ['먹다'], 'example_ja': [''], 'example_ko': [''], 'level': [level]})
 
 # ==========================================
@@ -150,6 +143,7 @@ if not todays_words.empty and st.session_state.current_index < len(todays_words)
     st.progress(st.session_state.current_index / len(todays_words))
     st.markdown(f"**🔄 학습 횟수: {st.session_state.session_count}회차 | 오늘의 {selected_level} 진행: {st.session_state.current_index + 1} / {len(todays_words)}**")
     
+    # 예문 HTML 조립
     example_html = ""
     if pd.notna(current_word.get('example_ja')) and current_word.get('example_ja') != "":
         example_html = f"""
@@ -159,6 +153,12 @@ if not todays_words.empty and st.session_state.current_index < len(todays_words)
 </div>
 """
 
+    # [핵심 추가] N5, N4, N3 급수일 때만 앞면에 히라가나(발음) 렌더링
+    front_reading_html = ""
+    if current_word['level'] in ['N5', 'N4', 'N3']:
+        front_reading_html = f'<h3 style="font-size: 26px; font-weight: 900; color: #ff6b6b; margin: 0 0 -10px 0;">{current_word["reading"]}</h3>'
+
+    # 카드 HTML 조립
     card_html = f"""
 <div class="flip-container">
 <label>
@@ -166,6 +166,7 @@ if not todays_words.empty and st.session_state.current_index < len(todays_words)
 <div class="flipper">
 <div class="front">
 <span class="level-badge">JLPT {current_word['level']}</span>
+{front_reading_html}
 <h1 class="kanji-text">{current_word['kanji']}</h1>
 <p style="font-size: 15px; font-weight: 900; color: #666; margin-top: 20px;">터치해서 정답 보기 👆</p>
 </div>
