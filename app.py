@@ -143,4 +143,8 @@ with st.sidebar:
                         {gen_level},勉強,べんきょう,공부,日本語の勉強をする。,일본어 공부를 한다.
                         """
                         response = model.generate_content(prompt)
-                        ai_text = response.text.strip().replace("
+                        # 이 아래 코드가 무조건 '한 줄'로 길게 이어져 있어야 합니다!
+                        ai_text = response.text.strip().replace("```csv", "").replace("```", "").strip()
+                        
+                        # 2. 결과 파싱 및 시트 업데이트
+                        new_rows = []
