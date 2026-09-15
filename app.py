@@ -144,7 +144,7 @@ with st.sidebar:
                         """
                         response = model.generate_content(prompt)
                         # 이 아래 코드가 무조건 '한 줄'로 길게 이어져 있어야 합니다!
-                        ai_text = response.text.strip().replace("```csv", "").replace("```", "").strip()
+                         ai_text = response.text.strip().replace("```csv", "").replace("```", "").strip()
                         
                         # 2. 결과 파싱 및 시트 업데이트
                         new_rows = []
