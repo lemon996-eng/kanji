@@ -130,7 +130,7 @@ with st.sidebar:
                     try:
                         # 1. 제미나이 호출 (gemini-2.0-flash 적용)
                         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                        model = genai.GenerativeModel('gemini-2.0-flash')
+                        model = genai.GenerativeModel('gemini-3.6-flash')
                         
                         prompt = f"""
                         당신은 전문 일본어 강사입니다. JLPT {gen_level} 급수에 해당하는 필수 한자 단어 {gen_count}개를 만들어주세요.
