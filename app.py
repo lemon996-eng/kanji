@@ -30,12 +30,10 @@ def init_firebase_and_google():
         else:
             return None, None
             
-        # 파이어베이스 DB 연결
         if not firebase_admin._apps:
             firebase_admin.initialize_app(cred)
         db = firestore.client()
         
-        # 구글 시트 연결 (파이어베이스 열쇠 재활용)
         scopes = ['https://www.googleapis.com/auth/spreadsheets']
         gspread_creds = Credentials.from_service_account_info(key_dict, scopes=scopes)
         gspread_client = gspread.authorize(gspread_creds)
@@ -47,57 +45,248 @@ def init_firebase_and_google():
 
 db, gc = init_firebase_and_google()
 
-# --- [사용자별 DB 데이터 불러오기 / 저장하기] ---
-def load_db_progress(user_name):
-    if db:
-        try:
-            doc_id = f"user_{user_name.strip()}"
-            doc_ref = db.collection('japanese_app_users').document(doc_id)
-            doc = doc_ref.get()
-            if doc.exists:
-                data = doc.to_dict()
+# --- [사용자 인증 및 데이터 관리] ---
+def authenticate_and_load(user_name, password):
+    if not db:
+        return {'status': 'success', 'session_count': 1, 'studied_words': []}
+    
+    try:
+        doc_id = f"user_{user_name.strip()}"
+        doc_ref = db.collection('japanese_app_users').document(doc_id)
+        doc = doc_ref.get()
+        
+        if doc.exists:
+            data = doc.to_dict()
+            stored_pw = data.get('password', '')
+            # 기존 비밀번호가 없는 유저이거나 비밀번호가 일치하는 경우
+            if stored_pw == '' or stored_pw == password.strip():
+                if stored_pw == '' and password.strip() != '':
+                    doc_ref.update({'password': password.strip()})
                 return {
+                    'status': 'success',
                     'session_count': data.get('session_count', 1),
                     'studied_words': data.get('studied_words', [])
                 }
-        except Exception as e:
-            st.error(f"진행도 로드 오류: {e}")
-    return {'session_count': 1, 'studied_words': []}
+            else:
+                return {'status': 'wrong_password'}
+        else:
+            # 신규 사용자 등록
+            doc_ref.set({
+                'user_name': user_name.strip(),
+                'password': password.strip(),
+                'session_count': 1,
+                'studied_words': []
+            })
+            return {'status': 'success', 'session_count': 1, 'studied_words': []}
+            
+    except Exception as e:
+        st.error(f"DB 오류: {e}")
+        return {'status': 'error', 'message': str(e)}
 
-def save_db_progress(user_name, session_count, studied_words):
+def save_db_progress(user_name, password, session_count, studied_words):
     if db:
         try:
             doc_id = f"user_{user_name.strip()}"
             doc_ref = db.collection('japanese_app_users').document(doc_id)
             doc_ref.set({
                 'user_name': user_name.strip(),
+                'password': password.strip(),
                 'session_count': session_count,
                 'studied_words': studied_words
-            })
+            }, merge=True)
         except Exception as e:
             st.error(f"진행도 저장 오류: {e}")
 
+def get_all_users():
+    users_list = []
+    if db:
+        try:
+            docs = db.collection('japanese_app_users').stream()
+            for doc in docs:
+                data = doc.to_dict()
+                users_list.append({
+                    '이름': data.get('user_name', '알수없음'),
+                    '회차': data.get('session_count', 1),
+                    '외운 한자 수': len(data.get('studied_words', [])),
+                    'doc_id': doc.id
+                })
+        except Exception as e:
+            st.error(f"전체 목록 로드 오류: {e}")
+    return users_list
+
+def delete_user(doc_id):
+    if db:
+        try:
+            db.collection('japanese_app_users').document(doc_id).delete()
+            return True
+        except Exception as e:
+            st.error(f"삭제 오류: {e}")
+    return False
+
 # ==========================================
-# 2. 팝 앤 게임 테마 CSS
+# 2. 프리미엄 팝 & 게임 UI 커스텀 CSS
 # ==========================================
+st.set_page_config(page_title="한자 마스터!", page_icon="🎮", layout="centered")
+
 st.markdown("""
 <style>
-.stApp { background-color: #fff9e6; }
-h1, h2, h3, p, span, div { color: #000; }
-.flip-container { perspective: 1000px; width: 100%; margin: 10px auto 20px auto; }
+.stApp {
+    background: linear-gradient(135deg, #fff9e6 0%, #f7f1e3 100%);
+    font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif;
+}
+
+h1, h2, h3, p, span, div { color: #2c3e50; }
+
+.player-card {
+    background: #ffffff;
+    border: 3px solid #2d3436;
+    border-radius: 18px;
+    padding: 16px 20px;
+    box-shadow: 5px 5px 0px #2d3436;
+    margin-bottom: 20px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.player-info-title {
+    font-size: 13px;
+    font-weight: 800;
+    color: #636e72;
+    margin: 0;
+}
+
+.player-badge {
+    display: inline-block;
+    background: #ffeaa7;
+    border: 2px solid #2d3436;
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-weight: 900;
+    font-size: 13px;
+    color: #2d3436;
+    box-shadow: 2px 2px 0px #2d3436;
+    margin-left: 4px;
+}
+
+.flip-container {
+    perspective: 1000px;
+    width: 100%;
+    margin: 15px auto 25px auto;
+}
+
 .flip-toggle { display: none; }
-.flipper { transition: 0.6s; transform-style: preserve-3d; position: relative; height: 350px; cursor: pointer; }
+
+.flipper {
+    transition: transform 0.6s cubic-bezier(0.4, 0.2, 0.2, 1);
+    transform-style: preserve-3d;
+    position: relative;
+    height: 380px;
+    cursor: pointer;
+}
+
 .flip-toggle:checked + .flipper { transform: rotateY(180deg); }
-.front, .back { backface-visibility: hidden; position: absolute; top: 0; left: 0; width: 100%; height: 100%; border-radius: 16px; border: 4px solid #000; box-shadow: 6px 6px 0 #000; display: flex; flex-direction: column; justify-content: center; align-items: center; background-color: #fff; }
-.back { transform: rotateY(180deg); }
-.level-badge { background-color: #4ecdc4; padding: 6px 16px; border-radius: 20px; border: 3px solid #000; font-size: 14px; font-weight: 900; margin-bottom: 10px; box-shadow: 3px 3px 0 #000; }
-.kanji-text { font-size: 85px; font-weight: 900; margin: 10px 0; }
-.reading-text { font-size: 32px; font-weight: 900; margin: 5px 0; }
-.meaning-text { font-size: 28px; font-weight: 900; color: #ff6b6b; margin: 5px 0; padding: 0 10px; }
-.example-box { margin-top: 15px; padding: 12px; background-color: #feca57; border-radius: 12px; width: 85%; border: 3px solid #000; box-shadow: 3px 3px 0 #000; }
-div[data-testid="stButton"] button { border: 3px solid #000 !important; box-shadow: 4px 4px 0 #000 !important; border-radius: 12px !important; font-weight: 900 !important; transition: all 0.1s !important; }
-div[data-testid="stButton"] button:active { box-shadow: 0px 0px 0 #000 !important; transform: translateY(4px) translateX(4px) !important; }
-div[data-testid="stButton"] button[kind="primary"] { background-color: #feca57 !important; }
+
+.front, .back {
+    backface-visibility: hidden;
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    border-radius: 24px;
+    border: 4px solid #2d3436;
+    box-shadow: 8px 8px 0px #2d3436;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    background-color: #ffffff;
+    padding: 20px;
+    box-sizing: border-box;
+}
+
+.back {
+    transform: rotateY(180deg);
+    background: linear-gradient(180deg, #ffffff 0%, #fffdf9 100%);
+}
+
+.level-badge {
+    background-color: #4ecdc4;
+    color: #ffffff;
+    padding: 6px 18px;
+    border-radius: 20px;
+    border: 3px solid #2d3436;
+    font-size: 15px;
+    font-weight: 900;
+    margin-bottom: 12px;
+    box-shadow: 3px 3px 0px #2d3436;
+    letter-spacing: 1px;
+}
+
+.kanji-text {
+    font-size: 90px;
+    font-weight: 900;
+    margin: 5px 0;
+    color: #2d3436;
+    text-shadow: 2px 2px 0px #dfe6e9;
+}
+
+.reading-text {
+    font-size: 32px;
+    font-weight: 900;
+    margin: 8px 0;
+    color: #0984e3;
+}
+
+.meaning-text {
+    font-size: 28px;
+    font-weight: 900;
+    color: #d63031;
+    margin: 5px 0;
+    padding: 0 10px;
+    text-align: center;
+}
+
+.example-box {
+    margin-top: 15px;
+    padding: 14px 18px;
+    background-color: #ffeaa7;
+    border-radius: 16px;
+    width: 90%;
+    border: 3px solid #2d3436;
+    box-shadow: 4px 4px 0px #2d3436;
+    text-align: center;
+}
+
+div[data-testid="stButton"] button {
+    border: 3px solid #2d3436 !important;
+    box-shadow: 4px 4px 0px #2d3436 !important;
+    border-radius: 14px !important;
+    font-weight: 900 !important;
+    font-size: 16px !important;
+    padding: 12px 20px !important;
+    transition: all 0.15s ease !important;
+}
+
+div[data-testid="stButton"] button:hover {
+    transform: translateY(-2px);
+    box-shadow: 6px 6px 0px #2d3436 !important;
+}
+
+div[data-testid="stButton"] button:active {
+    box-shadow: 0px 0px 0px #2d3436 !important;
+    transform: translateY(4px) translateX(4px) !important;
+}
+
+div[data-testid="stButton"] button[kind="primary"] {
+    background-color: #55efc4 !important;
+    color: #2d3436 !important;
+}
+
+.stProgress > div > div > div > div {
+    background-color: #ff7675;
+    border-radius: 10px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -124,86 +313,145 @@ def load_data(level):
     except Exception as e:
         return pd.DataFrame({'kanji': ['食べる'], 'reading': ['たべる'], 'meaning': ['먹다'], 'example_ja': [''], 'example_ko': [''], 'level': [level]})
 
-# --- [비밀 관리자 에이전트 패널 (사이드바)] ---
+# --- [비밀 관리자 조종실 (사이드바)] ---
 with st.sidebar:
-    st.header("🤖 AI 단어 생성 에이전트")
-    st.write("비밀번호를 입력하여 조종실을 여세요.")
-    admin_pw = st.text_input("비밀번호", type="password")
+    st.header("🤖 관리자 조종실")
+    admin_pw = st.text_input("관리자 비밀번호", type="password")
     
     if admin_pw == "0000":
-        st.success("✅ 에이전트 접근 허가됨")
-        gen_level = st.selectbox("생성할 급수", ["N5", "N4", "N3", "N2", "N1"])
-        gen_count = st.number_input("생성할 단어 개수", min_value=5, max_value=30, value=10)
+        st.success("✅ 관리자 인증 완료")
         
-        if st.button("🚀 단어 생성 및 시트 업데이트"):
-            if "GEMINI_API_KEY" not in st.secrets:
-                st.error("스트림릿 Secrets에 GEMINI_API_KEY가 없습니다!")
-            else:
-                with st.spinner(f"AI가 {gen_level} 단어 {gen_count}개를 수집하고 있습니다. (약 10~20초 소요)"):
-                    try:
-                        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                        model = genai.GenerativeModel('gemini-3.6-flash')
-                        
-                        prompt = f"""
-                        당신은 전문 일본어 강사입니다. JLPT {gen_level} 급수에 해당하는 필수 한자 단어 {gen_count}개를 만들어주세요.
-                        반드시 아래의 규칙을 엄격하게 지켜서 CSV 형식으로만 출력하세요. 마크다운 기호(```csv 등)나 부가 설명은 절대 쓰지 마세요.
-                        규칙:
-                        1. 각 줄마다 level, kanji, reading, meaning, example_ja, example_ko 순서로 콤마(,)로 구분
-                        2. level은 반드시 '{gen_level}' 로 작성
-                        3. kanji가 없는 단어(히라가나만 있는 단어)는 제외
-                        출력 예시:
-                        {gen_level},勉強,べんきょう,공부,日本語の勉強をする。,일본어 공부를 한다.
-                        """
-                        response = model.generate_content(prompt)
-                        ai_text = response.text.strip().replace("```csv", "").replace("```", "").strip()
-                        
-                        new_rows = []
-                        for line in ai_text.split('\n'):
-                            if line.strip():
-                                row_data = [item.strip() for item in line.split(',')]
-                                if len(row_data) == 6:
-                                    new_rows.append(row_data)
-                        
-                        if new_rows and gc:
-                            sheet = gc.open_by_key(SHEET_ID).sheet1
-                            sheet.append_rows(new_rows)
-                            st.success(f"🎉 성공적으로 {len(new_rows)}개의 단어를 구글 시트에 추가했습니다!")
-                            st.cache_data.clear()
-                        else:
-                            st.error("데이터를 추가하지 못했습니다. 형식이 맞지 않거나 시트 권한을 확인하세요.")
+        tab1, tab2 = st.tabs(["🤖 AI 단어 생성", "👥 전체 사용자 관리"])
+        
+        with tab1:
+            gen_level = st.selectbox("생성할 급수", ["N5", "N4", "N3", "N2", "N1"])
+            gen_count = st.number_input("생성할 단어 개수", min_value=5, max_value=30, value=10)
+            
+            if st.button("🚀 단어 생성 및 시트 업데이트"):
+                if "GEMINI_API_KEY" not in st.secrets:
+                    st.error("스트림릿 Secrets에 GEMINI_API_KEY가 없습니다!")
+                else:
+                    with st.spinner(f"AI가 {gen_level} 단어 {gen_count}개를 수집하고 있습니다..."):
+                        try:
+                            genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+                            model = genai.GenerativeModel('gemini-3.6-flash')
                             
-                    except Exception as e:
-                        st.error(f"에이전트 작동 중 오류 발생: {e}")
+                            prompt = f"""
+                            당신은 전문 일본어 강사입니다. JLPT {gen_level} 급수에 해당하는 필수 한자 단어 {gen_count}개를 만들어주세요.
+                            반드시 아래의 규칙을 엄격하게 지켜서 CSV 형식으로만 출력하세요. 마크다운 기호(```csv 등)나 부가 설명은 절대 쓰지 마세요.
+                            규칙:
+                            1. 각 줄마다 level, kanji, reading, meaning, example_ja, example_ko 순서로 콤마(,)로 구분
+                            2. level은 반드시 '{gen_level}' 로 작성
+                            3. kanji가 없는 단어(히라가나만 있는 단어)는 제외
+                            출력 예시:
+                            {gen_level},勉強,べんきょう,공부,日本語の勉強をする。,일본어 공부를 한다.
+                            """
+                            response = model.generate_content(prompt)
+                            ai_text = response.text.strip().replace("```csv", "").replace("```", "").strip()
+                            
+                            new_rows = []
+                            for line in ai_text.split('\n'):
+                                if line.strip():
+                                    row_data = [item.strip() for item in line.split(',')]
+                                    if len(row_data) == 6:
+                                        new_rows.append(row_data)
+                            
+                            if new_rows and gc:
+                                sheet = gc.open_by_key(SHEET_ID).sheet1
+                                sheet.append_rows(new_rows)
+                                st.success(f"🎉 성공적으로 {len(new_rows)}개의 단어를 구글 시트에 추가했습니다!")
+                                st.cache_data.clear()
+                            else:
+                                st.error("데이터 추가 실패: 형식을 확인하세요.")
+                                
+                        except Exception as e:
+                            st.error(f"오류 발생: {e}")
+        
+        with tab2:
+            st.subheader("📊 등록된 플레이어 현황")
+            all_users = get_all_users()
+            if all_users:
+                df_users = pd.DataFrame(all_users)
+                st.dataframe(df_users[['이름', '회차', '외운 한자 수']], use_container_width=True)
+                
+                st.markdown("---")
+                st.subheader("🗑️ 특정 사용자 데이터 삭제")
+                user_to_delete = st.selectbox("삭제할 사용자 선택", [u['이름'] for u in all_users])
+                if st.button("❌ 선택한 사용자 삭제", type="primary"):
+                    target = next((u for u in all_users if u['이름'] == user_to_delete), None)
+                    if target and delete_user(target['doc_id']):
+                        st.success(f"'{user_to_delete}' 유저 삭제 완료!")
+                        st.rerun()
+            else:
+                st.info("등록된 사용자가 없습니다.")
 
 # ==========================================
 # 4. 메인 화면 UI 및 사용자별 학습 로직
 # ==========================================
-st.title("🎮 한자 마스터!")
+st.markdown("<h1 style='text-align: center; font-size: 40px; font-weight: 900; margin-bottom: 20px;'>🎮 JLPT 한자 마스터!</h1>", unsafe_allow_html=True)
 
-# 4-1. 사용자 이름 입력창
-user_name = st.text_input("👤 사용자 이름을 입력하세요 (이름별로 학습 데이터가 따로 저장됩니다):", value="홍길동").strip()
+# 4-1. 로그인 및 프로필 설정 영역
+col_user, col_pw, col_level = st.columns([4, 4, 3])
+
+with col_user:
+    user_name = st.text_input("👤 플레이어 이름", value="홍길동", help="처음 입력 시 자동으로 새 계정이 생성됩니다.").strip()
+
+with col_pw:
+    user_pw = st.text_input("🔑 비밀번호", type="password", help="계정보호를 위한 비밀번호를 입력하세요.").strip()
+
+with col_level:
+    selected_level = st.selectbox("🎯 학습 급수", ["N5", "N4", "N3", "N2", "N1"])
 
 if not user_name:
-    st.info("👋 이름을 입력하고 학습을 시작해보세요!")
+    st.info("👋 플레이어 이름을 입력하고 로그인해 주세요!")
     st.stop()
 
-# 4-2. 사용자 전환 시 데이터 새로 로드
+if not user_pw:
+    st.warning("🔒 계정 보호를 위해 비밀번호를 입력해 주세요. (신규 생성 시 해당 비밀번호로 설정됩니다)")
+    st.stop()
+
+# 사용자 로그인/인증 검사
+auth_result = authenticate_and_load(user_name, user_pw)
+
+if auth_result['status'] == 'wrong_password':
+    st.error("❌ 비밀번호가 일치하지 않습니다! 정확한 비밀번호를 입력해 주세요.")
+    st.stop()
+elif auth_result['status'] == 'error':
+    st.error("⚠️ 데이터베이스 연결 중 오류가 발생했습니다.")
+    st.stop()
+
+# 로그인 성공 처리
 if 'current_user' not in st.session_state or st.session_state.current_user != user_name:
     st.session_state.current_user = user_name
-    st.session_state.db_progress = load_db_progress(user_name)
-    st.session_state.session_count = st.session_state.db_progress['session_count']
+    st.session_state.db_progress = auth_result
+    st.session_state.session_count = auth_result['session_count']
     st.session_state.current_index = 0
-    # 사용자 변경 시 기존 단어장 캐시 초기화
     for key in list(st.session_state.keys()):
         if key.startswith('vocab_'):
             del st.session_state[key]
-
-# 4-3. 급수 선택
-selected_level = st.selectbox("학습할 JLPT 급수를 선택하세요:", ["N5", "N4", "N3", "N2", "N1"])
+else:
+    st.session_state.db_progress = auth_result
 
 if 'current_level' not in st.session_state or st.session_state.current_level != selected_level:
     st.session_state.current_level = selected_level
     st.session_state.current_index = 0
+
+# 4-2. 사용자 대시보드 상태 바
+total_studied = len(st.session_state.db_progress.get('studied_words', []))
+session_cnt = st.session_state.session_count
+
+st.markdown(f"""
+<div class="player-card">
+    <div>
+        <span class="player-info-title">LOGGED IN PLAYER</span><br>
+        <span style="font-size: 19px; font-weight: 900; color: #2d3436;">👤 {user_name} 님</span>
+    </div>
+    <div>
+        <span class="player-badge">🔥 {session_cnt}회차</span>
+        <span class="player-badge" style="background-color: #74b9ff; color: white;">⭐ 완맹한 한자: {total_studied}개</span>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
 # 사용자별 + 급수별 단어 세션
 session_key = f'vocab_{selected_level}_{user_name}'
@@ -215,21 +463,24 @@ if session_key not in st.session_state:
 df = st.session_state[session_key]
 todays_words = df[df['studied'] == False].head(15)
 
-# 4-4. 카드 학습 화면
+# 4-3. 카드 학습 화면
 if not todays_words.empty and st.session_state.current_index < len(todays_words):
     current_word = todays_words.iloc[st.session_state.current_index]
-    st.progress(st.session_state.current_index / len(todays_words))
-    st.markdown(f"**👤 {user_name}님 | 🔄 학습 횟수: {st.session_state.session_count}회차 | 오늘의 {selected_level} 진행: {st.session_state.current_index + 1} / {len(todays_words)}**")
+    
+    # 프로그레스 바
+    progress_val = st.session_state.current_index / len(todays_words)
+    st.progress(progress_val)
+    st.markdown(f"<div style='text-align: right; font-weight: 900; font-size: 14px; color: #636e72; margin-top: -10px;'>오늘의 {selected_level} 달성도: {st.session_state.current_index + 1} / {len(todays_words)}</div>", unsafe_allow_html=True)
     
     example_html = ""
     if pd.notna(current_word.get('example_ja')) and current_word.get('example_ja') != "":
         example_html = f"""<div class="example-box">
-<p style="font-size: 15px; margin: 0 0 5px 0; font-weight: 900;">{current_word['example_ja']}</p>
-<p style="font-size: 13px; margin: 0; font-weight: bold; color: #333;">{current_word['example_ko']}</p></div>"""
+<p style="font-size: 16px; margin: 0 0 4px 0; font-weight: 900; color: #2d3436;">{current_word['example_ja']}</p>
+<p style="font-size: 13px; margin: 0; font-weight: 700; color: #636e72;">{current_word['example_ko']}</p></div>"""
 
     front_reading_html = ""
     if current_word['level'] in ['N5', 'N4', 'N3']:
-        front_reading_html = f'<h3 style="font-size: 12px; font-weight: 900; color: #ff6b6b; margin: 0 0 -5px 0;">{current_word["reading"]}</h3>'
+        front_reading_html = f'<h3 style="font-size: 14px; font-weight: 900; color: #ff7675; margin: 0 0 -5px 0;">{current_word["reading"]}</h3>'
 
     card_html = f"""
 <div class="flip-container"><label>
@@ -238,9 +489,9 @@ if not todays_words.empty and st.session_state.current_index < len(todays_words)
 <span class="level-badge">JLPT {current_word['level']}</span>
 {front_reading_html}
 <h1 class="kanji-text">{current_word['kanji']}</h1>
-<p style="font-size: 15px; font-weight: 900; color: #666; margin-top: 20px;">터치해서 정답 보기 👆</p>
+<p style="font-size: 14px; font-weight: 900; color: #b2bec3; margin-top: 15px;">카드 터치 ➔ 정답 확인 👆</p>
 </div><div class="back">
-<span class="level-badge">JLPT {current_word['level']}</span>
+<span class="level-badge" style="background-color: #ff7675;">JLPT {current_word['level']}</span>
 <h2 class="reading-text">📖 {current_word['reading']}</h2>
 <h1 class="meaning-text">💡 {current_word['meaning']}</h1>
 {example_html}
@@ -255,25 +506,25 @@ if not todays_words.empty and st.session_state.current_index < len(todays_words)
         st.audio(audio_bytes, format='audio/mp3')
     except Exception: pass
         
-    st.markdown("---")
+    st.markdown("<br>", unsafe_allow_html=True)
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("❌ 다시 복습", use_container_width=True):
+        if st.button("❌ 다시 복습하기", use_container_width=True):
             st.session_state.current_index += 1
             st.rerun()
     with col2:
-        if st.button("⭕ 학습 완료", type="primary", use_container_width=True):
+        if st.button("⭕ 완맹 완료!", type="primary", use_container_width=True):
             word_index = current_word.name 
             st.session_state[session_key].at[word_index, 'studied'] = True
             if current_word['kanji'] not in st.session_state.db_progress['studied_words']:
                 st.session_state.db_progress['studied_words'].append(current_word['kanji'])
-                save_db_progress(user_name, st.session_state.session_count, st.session_state.db_progress['studied_words'])
+                save_db_progress(user_name, user_pw, st.session_state.session_count, st.session_state.db_progress['studied_words'])
             st.session_state.current_index += 1
             st.rerun()
 else:
-    st.success(f"🎉 {user_name}님, {selected_level} 급수 학습을 완료했습니다!")
+    st.success(f"🎉 축하합니다! {user_name}님의 {selected_level} 학습을 완료했습니다!")
     if st.button("다음 단어 계속 학습하기 🚀", type="primary", use_container_width=True):
         st.session_state.current_index = 0
         st.session_state.session_count += 1
-        save_db_progress(user_name, st.session_state.session_count, st.session_state.db_progress['studied_words'])
+        save_db_progress(user_name, user_pw, st.session_state.session_count, st.session_state.db_progress['studied_words'])
         st.rerun()
