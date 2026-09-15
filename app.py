@@ -11,7 +11,6 @@ import os
 import gspread
 from google.oauth2.service_account import Credentials
 import google.generativeai as genai
-import csv
 
 # ==========================================
 # 1. 파이어베이스 및 구글 시트 인증 설정
@@ -21,7 +20,6 @@ def init_firebase_and_google():
     db = None
     gspread_client = None
     
-    # 1-1. 파이어베이스 열쇠 찾기
     try:
         if os.path.exists('firebase_key.json'):
             cred = credentials.Certificate('firebase_key.json')
@@ -37,7 +35,7 @@ def init_firebase_and_google():
             firebase_admin.initialize_app(cred)
         db = firestore.client()
         
-        # 1-2. 구글 시트 연결 (파이어베이스 열쇠 재활용)
+        # 구글 시트 연결 (파이어베이스 열쇠 재활용)
         scopes = ['https://www.googleapis.com/auth/spreadsheets']
         gspread_creds = Credentials.from_service_account_info(key_dict, scopes=scopes)
         gspread_client = gspread.authorize(gspread_creds)
@@ -49,20 +47,35 @@ def init_firebase_and_google():
 
 db, gc = init_firebase_and_google()
 
-if db:
-    doc_ref = db.collection('japanese_app').document('my_progress')
-else:
-    doc_ref = None
-
-def load_db_progress():
-    if doc_ref:
-        doc = doc_ref.get()
-        if doc.exists: return doc.to_dict()
+# --- [사용자별 DB 데이터 불러오기 / 저장하기] ---
+def load_db_progress(user_name):
+    if db:
+        try:
+            doc_id = f"user_{user_name.strip()}"
+            doc_ref = db.collection('japanese_app_users').document(doc_id)
+            doc = doc_ref.get()
+            if doc.exists:
+                data = doc.to_dict()
+                return {
+                    'session_count': data.get('session_count', 1),
+                    'studied_words': data.get('studied_words', [])
+                }
+        except Exception as e:
+            st.error(f"진행도 로드 오류: {e}")
     return {'session_count': 1, 'studied_words': []}
 
-def save_db_progress(session_count, studied_words):
-    if doc_ref:
-        doc_ref.set({'session_count': session_count, 'studied_words': studied_words})
+def save_db_progress(user_name, session_count, studied_words):
+    if db:
+        try:
+            doc_id = f"user_{user_name.strip()}"
+            doc_ref = db.collection('japanese_app_users').document(doc_id)
+            doc_ref.set({
+                'user_name': user_name.strip(),
+                'session_count': session_count,
+                'studied_words': studied_words
+            })
+        except Exception as e:
+            st.error(f"진행도 저장 오류: {e}")
 
 # ==========================================
 # 2. 팝 앤 게임 테마 CSS
@@ -117,7 +130,7 @@ with st.sidebar:
     st.write("비밀번호를 입력하여 조종실을 여세요.")
     admin_pw = st.text_input("비밀번호", type="password")
     
-    if admin_pw == "0000": # 비밀번호는 '0000' 입니다.
+    if admin_pw == "0000":
         st.success("✅ 에이전트 접근 허가됨")
         gen_level = st.selectbox("생성할 급수", ["N5", "N4", "N3", "N2", "N1"])
         gen_count = st.number_input("생성할 단어 개수", min_value=5, max_value=30, value=10)
@@ -128,7 +141,6 @@ with st.sidebar:
             else:
                 with st.spinner(f"AI가 {gen_level} 단어 {gen_count}개를 수집하고 있습니다. (약 10~20초 소요)"):
                     try:
-                        # 1. 제미나이 호출 (gemini-2.0-flash 적용)
                         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
                         model = genai.GenerativeModel('gemini-3.6-flash')
                         
@@ -145,11 +157,9 @@ with st.sidebar:
                         response = model.generate_content(prompt)
                         ai_text = response.text.strip().replace("```csv", "").replace("```", "").strip()
                         
-                        # 2. 결과 파싱 및 시트 업데이트
                         new_rows = []
                         for line in ai_text.split('\n'):
                             if line.strip():
-                                # 콤마로 분리하여 리스트로 만듦
                                 row_data = [item.strip() for item in line.split(',')]
                                 if len(row_data) == 6:
                                     new_rows.append(row_data)
@@ -158,31 +168,45 @@ with st.sidebar:
                             sheet = gc.open_by_key(SHEET_ID).sheet1
                             sheet.append_rows(new_rows)
                             st.success(f"🎉 성공적으로 {len(new_rows)}개의 단어를 구글 시트에 추가했습니다!")
-                            st.cache_data.clear() # 캐시를 비워서 메인 화면에 즉시 반영
+                            st.cache_data.clear()
                         else:
                             st.error("데이터를 추가하지 못했습니다. 형식이 맞지 않거나 시트 권한을 확인하세요.")
                             
                     except Exception as e:
                         st.error(f"에이전트 작동 중 오류 발생: {e}")
 
-
 # ==========================================
-# 4. 메인 화면 UI 및 학습 로직
+# 4. 메인 화면 UI 및 사용자별 학습 로직
 # ==========================================
 st.title("🎮 한자 마스터!")
 
-if 'db_progress' not in st.session_state:
-    st.session_state.db_progress = load_db_progress()
-if 'session_count' not in st.session_state:
-    st.session_state.session_count = st.session_state.db_progress['session_count']
+# 4-1. 사용자 이름 입력창
+user_name = st.text_input("👤 사용자 이름을 입력하세요 (이름별로 학습 데이터가 따로 저장됩니다):", value="홍길동").strip()
 
+if not user_name:
+    st.info("👋 이름을 입력하고 학습을 시작해보세요!")
+    st.stop()
+
+# 4-2. 사용자 전환 시 데이터 새로 로드
+if 'current_user' not in st.session_state or st.session_state.current_user != user_name:
+    st.session_state.current_user = user_name
+    st.session_state.db_progress = load_db_progress(user_name)
+    st.session_state.session_count = st.session_state.db_progress['session_count']
+    st.session_state.current_index = 0
+    # 사용자 변경 시 기존 단어장 캐시 초기화
+    for key in list(st.session_state.keys()):
+        if key.startswith('vocab_'):
+            del st.session_state[key]
+
+# 4-3. 급수 선택
 selected_level = st.selectbox("학습할 JLPT 급수를 선택하세요:", ["N5", "N4", "N3", "N2", "N1"])
 
 if 'current_level' not in st.session_state or st.session_state.current_level != selected_level:
     st.session_state.current_level = selected_level
     st.session_state.current_index = 0
 
-session_key = f'vocab_{selected_level}'
+# 사용자별 + 급수별 단어 세션
+session_key = f'vocab_{selected_level}_{user_name}'
 if session_key not in st.session_state:
     df = load_data(selected_level)
     df['studied'] = df['kanji'].isin(st.session_state.db_progress['studied_words'])
@@ -191,10 +215,11 @@ if session_key not in st.session_state:
 df = st.session_state[session_key]
 todays_words = df[df['studied'] == False].head(15)
 
+# 4-4. 카드 학습 화면
 if not todays_words.empty and st.session_state.current_index < len(todays_words):
     current_word = todays_words.iloc[st.session_state.current_index]
     st.progress(st.session_state.current_index / len(todays_words))
-    st.markdown(f"**🔄 학습 횟수: {st.session_state.session_count}회차 | 오늘의 {selected_level} 진행: {st.session_state.current_index + 1} / {len(todays_words)}**")
+    st.markdown(f"**👤 {user_name}님 | 🔄 학습 횟수: {st.session_state.session_count}회차 | 오늘의 {selected_level} 진행: {st.session_state.current_index + 1} / {len(todays_words)}**")
     
     example_html = ""
     if pd.notna(current_word.get('example_ja')) and current_word.get('example_ja') != "":
@@ -242,13 +267,13 @@ if not todays_words.empty and st.session_state.current_index < len(todays_words)
             st.session_state[session_key].at[word_index, 'studied'] = True
             if current_word['kanji'] not in st.session_state.db_progress['studied_words']:
                 st.session_state.db_progress['studied_words'].append(current_word['kanji'])
-                save_db_progress(st.session_state.session_count, st.session_state.db_progress['studied_words'])
+                save_db_progress(user_name, st.session_state.session_count, st.session_state.db_progress['studied_words'])
             st.session_state.current_index += 1
             st.rerun()
 else:
-    st.success(f"🎉 {selected_level} 급수 학습 완료!")
+    st.success(f"🎉 {user_name}님, {selected_level} 급수 학습을 완료했습니다!")
     if st.button("다음 단어 계속 학습하기 🚀", type="primary", use_container_width=True):
         st.session_state.current_index = 0
         st.session_state.session_count += 1
-        save_db_progress(st.session_state.session_count, st.session_state.db_progress['studied_words'])
+        save_db_progress(user_name, st.session_state.session_count, st.session_state.db_progress['studied_words'])
         st.rerun()
