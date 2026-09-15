@@ -2,3 +2,5 @@ streamlit
 pandas
 gtts
 firebase-admin
+gspread
+google-generativeai
