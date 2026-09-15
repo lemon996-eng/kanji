@@ -6,12 +6,12 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import json
 import os
+import csv
 
 # [새로 추가된 에이전트용 라이브러리]
 import gspread
 from google.oauth2.service_account import Credentials
 import google.generativeai as genai
-import csv
 
 # ==========================================
 # 1. 파이어베이스 및 구글 시트 인증 설정
@@ -117,7 +117,7 @@ with st.sidebar:
     st.write("비밀번호를 입력하여 조종실을 여세요.")
     admin_pw = st.text_input("비밀번호", type="password")
     
-    if admin_pw == "0000": # 비밀번호는 '0000' 입니다. 원하시는 대로 바꾸셔도 됩니다!
+    if admin_pw == "0000":
         st.success("✅ 에이전트 접근 허가됨")
         gen_level = st.selectbox("생성할 급수", ["N5", "N4", "N3", "N2", "N1"])
         gen_count = st.number_input("생성할 단어 개수", min_value=5, max_value=30, value=10)
@@ -143,7 +143,29 @@ with st.sidebar:
                         {gen_level},勉強,べんきょう,공부,日本語の勉強をする。,일본어 공부를 한다.
                         """
                         response = model.generate_content(prompt)
+                        
+                        # 불필요한 마크다운 기호 제거
                         ai_text = response.text.strip().replace("```csv", "").replace("```", "").strip()
                         
-                        # 2. 결과 파싱 및 시트 업데이트
+                        # 2. 결과 파싱 및 구글 시트 업데이트
                         new_rows = []
+                        reader = csv.reader(io.StringIO(ai_text))
+                        for row in reader:
+                            # 데이터가 정상적으로 6개의 열을 가지고 있는지 확인
+                            if len(row) >= 6:
+                                new_rows.append(row[:6])
+                        
+                        # 3. 구글 시트에 저장
+                        if new_rows and gc:
+                            sheet = gc.open_by_key(SHEET_ID).sheet1 # 첫번째 워크시트 선택
+                            sheet.append_rows(new_rows) # 데이터 맨 아래에 추가
+                            st.success(f"✅ 성공적으로 {len(new_rows)}개의 {gen_level} 단어를 시트에 추가했습니다!")
+                            st.cache_data.clear() # 캐시를 초기화해서 앱에 즉시 반영되게 함
+                        elif not gc:
+                            st.error("⚠️ 구글 시트에 연결되지 않아 저장할 수 없습니다.")
+                        else:
+                            st.warning("⚠️ 생성된 단어가 없습니다. AI 응답 오류일 수 있으니 다시 시도해주세요.")
+                            
+                    except Exception as e:
+                        # try 블록을 닫는 except 블록 추가 (오류 발생 시 앱이 멈추지 않게 함)
+                        st.error(f"⚠️ 단어 생성 또는 시트 업데이트 중 오류가 발생했습니다: {e}")
