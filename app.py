@@ -6,6 +6,8 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import json
 import os
+import random
+from datetime import datetime
 
 # [에이전트용 라이브러리]
 import gspread
@@ -45,10 +47,12 @@ def init_firebase_and_google():
 
 db, gc = init_firebase_and_google()
 
-# --- [사용자 인증 및 데이터 관리] ---
+# --- [사용자 인증 및 데이터 관리 (접속 일수 기반 카운팅)] ---
 def authenticate_and_load(user_name, password):
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    
     if not db:
-        return {'status': 'success', 'session_count': 1, 'studied_words': []}
+        return {'status': 'success', 'session_count': 1, 'access_dates': [today_str], 'studied_words': []}
     
     try:
         doc_id = f"user_{user_name.strip()}"
@@ -58,42 +62,62 @@ def authenticate_and_load(user_name, password):
         if doc.exists:
             data = doc.to_dict()
             stored_pw = data.get('password', '')
-            # 기존 비밀번호가 없는 유저이거나 비밀번호가 일치하는 경우
+            
             if stored_pw == '' or stored_pw == password.strip():
                 if stored_pw == '' and password.strip() != '':
                     doc_ref.update({'password': password.strip()})
+                
+                # 접속 날짜 관리 및 접속 일수 카운트
+                access_dates = data.get('access_dates', [])
+                if today_str not in access_dates:
+                    access_dates.append(today_str)
+                    doc_ref.update({'access_dates': access_dates, 'session_count': len(access_dates)})
+                
+                session_count = len(access_dates) if access_dates else data.get('session_count', 1)
+                
                 return {
                     'status': 'success',
-                    'session_count': data.get('session_count', 1),
+                    'session_count': session_count,
+                    'access_dates': access_dates,
                     'studied_words': data.get('studied_words', [])
                 }
             else:
                 return {'status': 'wrong_password'}
         else:
-            # 신규 사용자 등록
+            # 신규 사용자 등록 (첫 접속일 등록)
+            access_dates = [today_str]
             doc_ref.set({
                 'user_name': user_name.strip(),
                 'password': password.strip(),
                 'session_count': 1,
+                'access_dates': access_dates,
                 'studied_words': []
             })
-            return {'status': 'success', 'session_count': 1, 'studied_words': []}
+            return {
+                'status': 'success',
+                'session_count': 1,
+                'access_dates': access_dates,
+                'studied_words': []
+            }
             
     except Exception as e:
         st.error(f"DB 오류: {e}")
         return {'status': 'error', 'message': str(e)}
 
-def save_db_progress(user_name, password, session_count, studied_words):
+def save_db_progress(user_name, password, session_count, studied_words, access_dates=None):
     if db:
         try:
             doc_id = f"user_{user_name.strip()}"
             doc_ref = db.collection('japanese_app_users').document(doc_id)
-            doc_ref.set({
+            update_data = {
                 'user_name': user_name.strip(),
                 'password': password.strip(),
                 'session_count': session_count,
                 'studied_words': studied_words
-            }, merge=True)
+            }
+            if access_dates is not None:
+                update_data['access_dates'] = access_dates
+            doc_ref.set(update_data, merge=True)
         except Exception as e:
             st.error(f"진행도 저장 오류: {e}")
 
@@ -106,8 +130,8 @@ def get_all_users():
                 data = doc.to_dict()
                 users_list.append({
                     '이름': data.get('user_name', '알수없음'),
-                    '회차': data.get('session_count', 1),
-                    '외운 한자 수': len(data.get('studied_words', [])),
+                    '접속 일수': data.get('session_count', len(data.get('access_dates', [1]))),
+                    '학습완료 한자 수': len(data.get('studied_words', [])),
                     'doc_id': doc.id
                 })
         except Exception as e:
@@ -372,7 +396,7 @@ with st.sidebar:
             all_users = get_all_users()
             if all_users:
                 df_users = pd.DataFrame(all_users)
-                st.dataframe(df_users[['이름', '회차', '외운 한자 수']], use_container_width=True)
+                st.dataframe(df_users[['이름', '접속 일수(회차)', '학습완료 한자 수']], use_container_width=True)
                 
                 st.markdown("---")
                 st.subheader("🗑️ 특정 사용자 데이터 삭제")
@@ -391,7 +415,7 @@ with st.sidebar:
 st.markdown("<h1 style='text-align: center; font-size: 40px; font-weight: 900; margin-bottom: 20px;'>🎮 JLPT 한자 마스터!</h1>", unsafe_allow_html=True)
 
 # 4-1. 로그인 및 프로필 설정 영역
-col_user, col_pw, col_level = st.columns([4, 4, 3])
+col_user, col_pw, col_level = st.columns(3)
 
 with col_user:
     user_name = st.text_input("👤 플레이어 이름", value="홍길동", help="처음 입력 시 자동으로 새 계정이 생성됩니다.").strip()
@@ -447,18 +471,22 @@ st.markdown(f"""
         <span style="font-size: 19px; font-weight: 900; color: #2d3436;">👤 {user_name} 님</span>
     </div>
     <div>
-        <span class="player-badge">🔥 {session_cnt}회차</span>
-        <span class="player-badge" style="background-color: #74b9ff; color: white;">⭐ 완맹한 한자: {total_studied}개</span>
+        <span class="player-badge">🔥 {session_cnt}일차 접속</span>
+        <span class="player-badge" style="background-color: #74b9ff; color: white;">⭐ 학습완료: {total_studied}개</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-# 사용자별 + 급수별 단어 세션
+# 사용자별 + 급수별 단어 세션 (랜덤 셔플 로직 적용)
 session_key = f'vocab_{selected_level}_{user_name}'
 if session_key not in st.session_state:
     df = load_data(selected_level)
     df['studied'] = df['kanji'].isin(st.session_state.db_progress['studied_words'])
-    st.session_state[session_key] = df
+    
+    # [1] 단어 무작위 셔플 (Unstudied 단어를 무작위로 섞음)
+    unstudied_df = df[df['studied'] == False].sample(frac=1).reset_index(drop=True)
+    studied_df = df[df['studied'] == True]
+    st.session_state[session_key] = pd.concat([unstudied_df, studied_df]).reset_index(drop=True)
 
 df = st.session_state[session_key]
 todays_words = df[df['studied'] == False].head(15)
@@ -513,18 +541,36 @@ if not todays_words.empty and st.session_state.current_index < len(todays_words)
             st.session_state.current_index += 1
             st.rerun()
     with col2:
-        if st.button("⭕ 완맹 완료!", type="primary", use_container_width=True):
+        if st.button("⭕ 학습 완료!", type="primary", use_container_width=True):
             word_index = current_word.name 
             st.session_state[session_key].at[word_index, 'studied'] = True
             if current_word['kanji'] not in st.session_state.db_progress['studied_words']:
                 st.session_state.db_progress['studied_words'].append(current_word['kanji'])
-                save_db_progress(user_name, user_pw, st.session_state.session_count, st.session_state.db_progress['studied_words'])
+                save_db_progress(
+                    user_name,
+                    user_pw,
+                    st.session_state.session_count,
+                    st.session_state.db_progress['studied_words'],
+                    st.session_state.db_progress.get('access_dates')
+                )
             st.session_state.current_index += 1
             st.rerun()
 else:
     st.success(f"🎉 축하합니다! {user_name}님의 {selected_level} 학습을 완료했습니다!")
     if st.button("다음 단어 계속 학습하기 🚀", type="primary", use_container_width=True):
         st.session_state.current_index = 0
-        st.session_state.session_count += 1
-        save_db_progress(user_name, user_pw, st.session_state.session_count, st.session_state.db_progress['studied_words'])
+        # 다음 세트를 위한 셔플 재실행
+        if session_key in st.session_state:
+            df_temp = st.session_state[session_key]
+            unstudied_temp = df_temp[df_temp['studied'] == False].sample(frac=1).reset_index(drop=True)
+            studied_temp = df_temp[df_temp['studied'] == True]
+            st.session_state[session_key] = pd.concat([unstudied_temp, studied_temp]).reset_index(drop=True)
+            
+        save_db_progress(
+            user_name,
+            user_pw,
+            st.session_state.session_count,
+            st.session_state.db_progress['studied_words'],
+            st.session_state.db_progress.get('access_dates')
+        )
         st.rerun()
