@@ -64,14 +64,19 @@ def authenticate_and_load(user_name, password):
             stored_pw = data.get('password', '')
             
             if stored_pw == '' or stored_pw == password.strip():
+                update_fields = {}
                 if stored_pw == '' and password.strip() != '':
-                    doc_ref.update({'password': password.strip()})
+                    update_fields['password'] = password.strip()
                 
                 # 접속 날짜 관리 및 접속 일수 카운트
                 access_dates = data.get('access_dates', [])
                 if today_str not in access_dates:
                     access_dates.append(today_str)
-                    doc_ref.update({'access_dates': access_dates, 'session_count': len(access_dates)})
+                    update_fields['access_dates'] = access_dates
+                    update_fields['session_count'] = len(access_dates)
+                
+                if update_fields:
+                    doc_ref.update(update_fields)
                 
                 session_count = len(access_dates) if access_dates else data.get('session_count', 1)
                 
@@ -320,6 +325,13 @@ div[data-testid="stButton"] button[kind="primary"] {
 SHEET_ID = "1h-kcu7Xr0Mpwy-cGMqxv9mIlxVFFXRXVMpP9DqxyRDQ"
 CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
 
+@st.cache_data(show_spinner=False)
+def generate_tts_audio(text, lang='ja'):
+    tts = gTTS(text=text, lang=lang)
+    audio_bytes = io.BytesIO()
+    tts.write_to_fp(audio_bytes)
+    return audio_bytes.getvalue()
+
 @st.cache_data(ttl=60)
 def load_data(level):
     try:
@@ -396,7 +408,7 @@ with st.sidebar:
             all_users = get_all_users()
             if all_users:
                 df_users = pd.DataFrame(all_users)
-                st.dataframe(df_users[['이름', '접속 일수(회차)', '학습완료 한자 수']], use_container_width=True)
+                st.dataframe(df_users[['이름', '접속 일수', '학습완료 한자 수']], use_container_width=True)
                 
                 st.markdown("---")
                 st.subheader("🗑️ 특정 사용자 데이터 삭제")
@@ -435,26 +447,33 @@ if not user_pw:
     st.stop()
 
 # 사용자 로그인/인증 검사
-auth_result = authenticate_and_load(user_name, user_pw)
+# (기존에는 버튼 클릭 등 매 rerun마다 Firestore를 다시 읽었지만,
+#  로그인 정보(이름/비밀번호)가 바뀌지 않았다면 다시 인증할 필요가 없으므로
+#  세션 정보 변경 시에만 DB를 조회하도록 최적화)
+need_auth = (
+    'current_user' not in st.session_state
+    or st.session_state.current_user != user_name
+    or st.session_state.get('current_pw') != user_pw
+)
 
-if auth_result['status'] == 'wrong_password':
-    st.error("❌ 비밀번호가 일치하지 않습니다! 정확한 비밀번호를 입력해 주세요.")
-    st.stop()
-elif auth_result['status'] == 'error':
-    st.error("⚠️ 데이터베이스 연결 중 오류가 발생했습니다.")
-    st.stop()
+if need_auth:
+    auth_result = authenticate_and_load(user_name, user_pw)
 
-# 로그인 성공 처리
-if 'current_user' not in st.session_state or st.session_state.current_user != user_name:
+    if auth_result['status'] == 'wrong_password':
+        st.error("❌ 비밀번호가 일치하지 않습니다! 정확한 비밀번호를 입력해 주세요.")
+        st.stop()
+    elif auth_result['status'] == 'error':
+        st.error("⚠️ 데이터베이스 연결 중 오류가 발생했습니다.")
+        st.stop()
+
     st.session_state.current_user = user_name
+    st.session_state.current_pw = user_pw
     st.session_state.db_progress = auth_result
     st.session_state.session_count = auth_result['session_count']
     st.session_state.current_index = 0
     for key in list(st.session_state.keys()):
         if key.startswith('vocab_'):
             del st.session_state[key]
-else:
-    st.session_state.db_progress = auth_result
 
 if 'current_level' not in st.session_state or st.session_state.current_level != selected_level:
     st.session_state.current_level = selected_level
@@ -528,11 +547,10 @@ if not todays_words.empty and st.session_state.current_index < len(todays_words)
     st.markdown(card_html, unsafe_allow_html=True)
     
     try:
-        tts = gTTS(text=current_word['reading'], lang='ja')
-        audio_bytes = io.BytesIO()
-        tts.write_to_fp(audio_bytes)
-        st.audio(audio_bytes, format='audio/mp3')
-    except Exception: pass
+        audio_data = generate_tts_audio(current_word['reading'])
+        st.audio(audio_data, format='audio/mp3')
+    except Exception:
+        pass
         
     st.markdown("<br>", unsafe_allow_html=True)
     col1, col2 = st.columns(2)
