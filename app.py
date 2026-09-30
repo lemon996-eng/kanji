@@ -1,12 +1,4 @@
 import streamlit as st
-
-# [핵심 추가] 모바일 홈 화면 아이콘 및 브라우저 탭 설정 
-# (반드시 다른 st. 명령어들보다 가장 먼저 실행되어야 합니다!)
-st.set_page_config(
-    page_title="한자 마스터", 
-    page_icon="🦊" # "icon.png" 처럼 이미지 파일 이름으로 변경 가능합니다.
-)
-
 import pandas as pd
 from gtts import gTTS
 import io
@@ -76,7 +68,7 @@ if not st.session_state.logged_in:
                 st.rerun()
             else:
                 st.warning("아이디를 입력해 주세요.")
-    st.stop() 
+    st.stop() # 로그인을 하지 않으면 아래 코드는 실행되지 않음
 
 # --- 로그인 성공 시 상단에 사용자 정보 표시 ---
 col1, col2 = st.columns([8, 2])
@@ -89,13 +81,14 @@ with col2:
         st.rerun()
 st.markdown("---")
 
+# 로그인한 사용자의 ID로 파이어베이스 문서(저장소) 지정
 if db:
     doc_ref = db.collection('japanese_app').document(f"progress_{st.session_state.user_id}")
 else:
     doc_ref = None
 
 # ==========================================
-# 3. 데이터베이스 진행도 로드
+# 3. 데이터베이스 진행도 로드 (기존 로직 유지)
 # ==========================================
 def load_db_progress():
     kst = timezone(timedelta(hours=9)) 
@@ -130,7 +123,7 @@ def save_db_progress(db_progress):
         }, merge=True)
 
 # ==========================================
-# 4. 팝 앤 게임 테마 CSS
+# 4. 팝 앤 게임 테마 CSS (기존 로직 유지)
 # ==========================================
 st.markdown("""
 <style>
@@ -176,6 +169,7 @@ def load_data(level):
     except Exception as e:
         return pd.DataFrame({'kanji': ['食べる'], 'reading': ['たべる'], 'meaning': ['먹다'], 'example_ja': [''], 'example_ko': [''], 'level': [level]})
 
+# --- [비밀 관리자 에이전트 패널 (사이드바)] ---
 with st.sidebar:
     st.header("🤖 AI 단어 생성 에이전트")
     st.write("비밀번호를 입력하여 조종실을 여세요.")
@@ -227,7 +221,7 @@ with st.sidebar:
                         st.error(f"에이전트 작동 중 오류 발생: {e}")
 
 # ==========================================
-# 6. 메인 화면 UI 및 학습 로직
+# 6. 메인 화면 UI 및 학습 로직 (기존 로직 유지)
 # ==========================================
 st.title("🎮 한자 마스터!")
 
@@ -245,7 +239,9 @@ if session_key not in st.session_state:
     df = load_data(selected_level)
     df['studied'] = df['kanji'].isin(st.session_state.db_progress['studied_words'])
     
+    # 카드를 무작위로 섞기
     df = df.sample(frac=1).reset_index(drop=True)
+    
     st.session_state[session_key] = df
 
 df = st.session_state[session_key]
@@ -255,6 +251,7 @@ if not todays_words.empty and st.session_state.current_index < len(todays_words)
     current_word = todays_words.iloc[st.session_state.current_index]
     st.progress(st.session_state.current_index / len(todays_words))
     
+    # 접속일수 표시
     st.markdown(f"**🔄 접속일수: {st.session_state.db_progress['login_days']}일차 | 오늘의 {selected_level} 진행: {st.session_state.current_index + 1} / {len(todays_words)}**")
     
     example_html = ""
