@@ -1,4 +1,12 @@
 import streamlit as st
+from PIL import Image
+
+
+img = Image.open("icon.png")
+st.set_page_config(page_title="한자 마스터", page_icon=img)
+
+
+
 import pandas as pd
 from gtts import gTTS
 import io

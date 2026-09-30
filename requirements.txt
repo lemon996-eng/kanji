@@ -4,3 +4,4 @@ gtts
 firebase-admin
 gspread
 google-generativeai
+Pillow
