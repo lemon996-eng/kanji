@@ -13,6 +13,9 @@ from google.oauth2.service_account import Credentials
 import google.generativeai as genai
 import csv
 
+# 앱 아이콘 설정 (가장 먼저 실행)
+st.set_page_config(page_title="한자 마스터", page_icon="🦊")
+
 # ==========================================
 # 1. 파이어베이스 및 구글 시트 인증 설정
 # ==========================================
@@ -47,7 +50,7 @@ def init_firebase_and_google():
 db, gc = init_firebase_and_google()
 
 # ==========================================
-# 2. 사용자별 로그인 화면 및 관리
+# 2. 닉네임 + 비밀번호 로그인 로직 (완벽 복원)
 # ==========================================
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
@@ -55,41 +58,51 @@ if 'logged_in' not in st.session_state:
 
 if not st.session_state.logged_in:
     st.title("🔐 JLPT 한자 마스터")
-    st.write("개인별 학습 진도 저장을 위해 로그인해 주세요.")
+    st.write("학습 진도와 접속일수를 기록하기 위해 로그인해 주세요. (처음 접속 시 닉네임과 비밀번호를 입력하면 자동 가입됩니다.)")
     
     with st.form("login_form"):
-        user_input = st.text_input("사용자 아이디 (이름 또는 닉네임)")
-        submit_button = st.form_submit_button("로그인")
+        user_input = st.text_input("닉네임 (아이디)")
+        pw_input = st.text_input("비밀번호", type="password")
+        submit_button = st.form_submit_button("로그인 / 시작하기")
         
         if submit_button:
-            if user_input.strip():
-                st.session_state.logged_in = True
-                st.session_state.user_id = user_input.strip()
-                st.rerun()
+            if user_input.strip() and pw_input.strip():
+                if db:
+                    # 사용자 정보가 담긴 파이어베이스 문서 지정
+                    user_ref = db.collection('japanese_app_users').document(user_input.strip())
+                    user_doc = user_ref.get()
+                    
+                    if user_doc.exists:
+                        # 기존 가입자: 비밀번호 확인
+                        stored_pw = user_doc.to_dict().get('password', '')
+                        if stored_pw == pw_input.strip():
+                            st.session_state.logged_in = True
+                            st.session_state.user_id = user_input.strip()
+                            st.rerun()
+                        else:
+                            st.error("❌ 비밀번호가 일치하지 않습니다.")
+                    else:
+                        # 신규 가입자: 비밀번호 저장 후 즉시 로그인
+                        user_ref.set({'password': pw_input.strip()})
+                        st.session_state.logged_in = True
+                        st.session_state.user_id = user_input.strip()
+                        st.success(f"환영합니다, {user_input.strip()}님! 계정이 생성되었습니다.")
+                        st.rerun()
+                else:
+                    st.error("⚠️ 데이터베이스에 연결할 수 없습니다.")
             else:
-                st.warning("아이디를 입력해 주세요.")
-    st.stop() # 로그인을 하지 않으면 아래 코드는 실행되지 않음
+                st.warning("닉네임과 비밀번호를 모두 입력해 주세요.")
+    st.stop() # 로그인을 하지 않으면 메인 화면(학습 로직)이 차단됨
 
-# --- 로그인 성공 시 상단에 사용자 정보 표시 ---
-col1, col2 = st.columns([8, 2])
-with col1:
-    st.markdown(f"**👤 현재 접속자: {st.session_state.user_id}**님")
-with col2:
-    if st.button("로그아웃", use_container_width=True):
-        st.session_state.logged_in = False
-        st.session_state.user_id = ""
-        st.rerun()
-st.markdown("---")
-
-# 로그인한 사용자의 ID로 파이어베이스 문서(저장소) 지정
+# ==========================================
+# 3. 로그인 성공 시 상단 정보 및 접속일수 처리
+# ==========================================
+# DB에서 개인 진행도 문서(progress_닉네임) 연결
 if db:
     doc_ref = db.collection('japanese_app').document(f"progress_{st.session_state.user_id}")
 else:
     doc_ref = None
 
-# ==========================================
-# 3. 데이터베이스 진행도 로드 (기존 로직 유지)
-# ==========================================
 def load_db_progress():
     kst = timezone(timedelta(hours=9)) 
     today_str = datetime.now(kst).strftime('%Y-%m-%d')
@@ -101,6 +114,7 @@ def load_db_progress():
             last_login = data.get('last_login', '')
             login_days = data.get('login_days', 1)
             
+            # 날짜가 변경되었을 때만 접속일수 +1 증가
             if last_login != today_str:
                 if last_login != '': 
                     login_days += 1
@@ -112,6 +126,12 @@ def load_db_progress():
                 data['studied_words'] = []
             return data
             
+        else:
+            # 최초 접속 시 초기 데이터 생성
+            init_data = {'login_days': 1, 'last_login': today_str, 'studied_words': []}
+            doc_ref.set(init_data)
+            return init_data
+            
     return {'login_days': 1, 'last_login': today_str, 'studied_words': []}
 
 def save_db_progress(db_progress):
@@ -122,8 +142,24 @@ def save_db_progress(db_progress):
             'studied_words': db_progress['studied_words']
         }, merge=True)
 
+# 세션에 접속일수와 진행도 불러오기
+if 'db_progress' not in st.session_state:
+    st.session_state.db_progress = load_db_progress()
+
+# 상단 UI (사용자 이름, 누적 접속일수, 로그아웃 버튼)
+col1, col2 = st.columns([8, 2])
+with col1:
+    st.markdown(f"**👤 {st.session_state.user_id}**님 | 📅 **누적 접속: {st.session_state.db_progress['login_days']}일차**")
+with col2:
+    if st.button("로그아웃", use_container_width=True):
+        st.session_state.logged_in = False
+        st.session_state.user_id = ""
+        del st.session_state['db_progress']
+        st.rerun()
+st.markdown("---")
+
 # ==========================================
-# 4. 팝 앤 게임 테마 CSS (기존 로직 유지)
+# 4. 팝 앤 게임 테마 CSS
 # ==========================================
 st.markdown("""
 <style>
@@ -169,11 +205,11 @@ def load_data(level):
     except Exception as e:
         return pd.DataFrame({'kanji': ['食べる'], 'reading': ['たべる'], 'meaning': ['먹다'], 'example_ja': [''], 'example_ko': [''], 'level': [level]})
 
-# --- [비밀 관리자 에이전트 패널 (사이드바)] ---
+# 비밀 관리자 에이전트 패널
 with st.sidebar:
     st.header("🤖 AI 단어 생성 에이전트")
     st.write("비밀번호를 입력하여 조종실을 여세요.")
-    admin_pw = st.text_input("비밀번호", type="password")
+    admin_pw = st.text_input("관리자 비밀번호", type="password")
     
     if admin_pw == "0000":
         st.success("✅ 에이전트 접근 허가됨")
@@ -184,7 +220,7 @@ with st.sidebar:
             if "GEMINI_API_KEY" not in st.secrets:
                 st.error("스트림릿 Secrets에 GEMINI_API_KEY가 없습니다!")
             else:
-                with st.spinner(f"AI가 {gen_level} 단어 {gen_count}개를 수집하고 있습니다. (약 10~20초 소요)"):
+                with st.spinner(f"AI가 {gen_level} 단어 {gen_count}개를 수집하고 있습니다."):
                     try:
                         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
                         model = genai.GenerativeModel('gemini-1.5-flash')
@@ -212,21 +248,18 @@ with st.sidebar:
                         if new_rows and gc:
                             sheet = gc.open_by_key(SHEET_ID).sheet1
                             sheet.append_rows(new_rows)
-                            st.success(f"🎉 성공적으로 {len(new_rows)}개의 단어를 구글 시트에 추가했습니다!")
+                            st.success(f"🎉 성공적으로 {len(new_rows)}개의 단어를 추가했습니다!")
                             st.cache_data.clear()
                         else:
-                            st.error("데이터를 추가하지 못했습니다. 형식이 맞지 않거나 시트 권한을 확인하세요.")
+                            st.error("데이터를 추가하지 못했습니다.")
                             
                     except Exception as e:
                         st.error(f"에이전트 작동 중 오류 발생: {e}")
 
 # ==========================================
-# 6. 메인 화면 UI 및 학습 로직 (기존 로직 유지)
+# 6. 메인 화면 UI 및 학습 로직
 # ==========================================
 st.title("🎮 한자 마스터!")
-
-if 'db_progress' not in st.session_state:
-    st.session_state.db_progress = load_db_progress()
 
 selected_level = st.selectbox("학습할 JLPT 급수를 선택하세요:", ["N5", "N4", "N3", "N2", "N1"])
 
@@ -239,9 +272,8 @@ if session_key not in st.session_state:
     df = load_data(selected_level)
     df['studied'] = df['kanji'].isin(st.session_state.db_progress['studied_words'])
     
-    # 카드를 무작위로 섞기
+    # 단어를 매번 랜덤으로 섞기
     df = df.sample(frac=1).reset_index(drop=True)
-    
     st.session_state[session_key] = df
 
 df = st.session_state[session_key]
@@ -251,8 +283,7 @@ if not todays_words.empty and st.session_state.current_index < len(todays_words)
     current_word = todays_words.iloc[st.session_state.current_index]
     st.progress(st.session_state.current_index / len(todays_words))
     
-    # 접속일수 표시
-    st.markdown(f"**🔄 접속일수: {st.session_state.db_progress['login_days']}일차 | 오늘의 {selected_level} 진행: {st.session_state.current_index + 1} / {len(todays_words)}**")
+    st.markdown(f"**오늘의 {selected_level} 진행: {st.session_state.current_index + 1} / {len(todays_words)}**")
     
     example_html = ""
     if pd.notna(current_word.get('example_ja')) and current_word.get('example_ja') != "":
