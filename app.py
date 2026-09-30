@@ -14,7 +14,7 @@ import google.generativeai as genai
 import csv
 
 # 앱 아이콘 설정 (가장 먼저 실행)
-st.set_page_config(page_title="한자 마스터", page_icon="🦊")
+st.set_page_config(page_title="한자 마스터", page_icon="icon.png")
 
 # ==========================================
 # 1. 파이어베이스 및 구글 시트 인증 설정
